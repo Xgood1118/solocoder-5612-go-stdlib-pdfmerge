@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"pdftool/internal/log"
@@ -13,17 +14,19 @@ import (
 )
 
 var (
-	watermarkText    string
-	watermarkImage   string
-	watermarkOutput  string
-	watermarkPages   string
-	watermarkOnTop   bool
-	watermarkOpacity float64
-	watermarkScale   float64
-	watermarkAngle   float64
-	watermarkPos     string
+	watermarkText     string
+	watermarkImage    string
+	watermarkOutput   string
+	watermarkPages    string
+	watermarkOnTop    bool
+	watermarkOpacity  float64
+	watermarkScale    float64
+	watermarkAngle    float64
+	watermarkPos      string
 	watermarkFontSize int
-	watermarkColor   string
+	watermarkColor    string
+	watermarkFontName string
+	watermarkDiagonal int
 )
 
 var watermarkCmd = &cobra.Command{
@@ -57,6 +60,7 @@ var watermarkCmd = &cobra.Command{
 		}
 
 		desc := buildWatermarkDesc()
+		log.Debug("水印配置: %s", desc)
 
 		if watermarkText != "" {
 			log.Info("添加文字水印: %s", watermarkText)
@@ -79,29 +83,61 @@ var watermarkCmd = &cobra.Command{
 	},
 }
 
+func parseHexColor(hex string) (float64, float64, float64, error) {
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) == 3 {
+		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+	}
+	if len(hex) != 6 {
+		return 0, 0, 0, fmt.Errorf("invalid hex color: %s", hex)
+	}
+
+	r, err := strconv.ParseInt(hex[0:2], 16, 32)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	g, err := strconv.ParseInt(hex[2:4], 16, 32)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	b, err := strconv.ParseInt(hex[4:6], 16, 32)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	return float64(r) / 255.0, float64(g) / 255.0, float64(b) / 255.0, nil
+}
+
 func buildWatermarkDesc() string {
 	parts := []string{}
 
-	if watermarkScale != 1.0 && watermarkScale != 0 {
-		parts = append(parts, fmt.Sprintf("s:%.2f", watermarkScale))
-	}
-	if watermarkAngle != 0 {
-		parts = append(parts, fmt.Sprintf("r:%.1f", watermarkAngle))
-	}
-	if watermarkOpacity > 0 && watermarkOpacity < 1 {
-		parts = append(parts, fmt.Sprintf("o:%.2f", watermarkOpacity))
-	}
-	if watermarkPos != "" {
-		parts = append(parts, fmt.Sprintf("p:%s", watermarkPos))
-	}
-	if watermarkFontSize > 0 {
-		parts = append(parts, fmt.Sprintf("fs:%d", watermarkFontSize))
-	}
+	parts = append(parts, fmt.Sprintf("f:%s", watermarkFontName))
+	parts = append(parts, fmt.Sprintf("p:%d", watermarkFontSize))
+	parts = append(parts, fmt.Sprintf("s:%.2f rel", watermarkScale))
+
 	if watermarkColor != "" {
-		parts = append(parts, fmt.Sprintf("c:%s", watermarkColor))
+		r, g, b, err := parseHexColor(watermarkColor)
+		if err == nil {
+			parts = append(parts, fmt.Sprintf("c:%.2f %.2f %.2f", r, g, b))
+		} else {
+			parts = append(parts, "c:0.50 0.50 0.50")
+		}
 	}
 
-	return strings.Join(parts, " ")
+	if watermarkAngle != 0 {
+		parts = append(parts, fmt.Sprintf("r:%.1f", watermarkAngle))
+	} else if watermarkDiagonal > 0 {
+		parts = append(parts, fmt.Sprintf("d:%d", watermarkDiagonal))
+	}
+
+	parts = append(parts, fmt.Sprintf("o:%.2f", watermarkOpacity))
+	parts = append(parts, "m:0")
+
+	if watermarkPos != "" {
+		parts = append(parts, fmt.Sprintf("po:%s", watermarkPos))
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 var watermarkRemoveCmd = &cobra.Command{
@@ -147,10 +183,12 @@ func init() {
 	watermarkCmd.Flags().StringVarP(&watermarkPages, "pages", "p", "", "指定页面范围，不指定则全部")
 	watermarkCmd.Flags().BoolVar(&watermarkOnTop, "on-top", false, "水印放在内容上方（默认在下方）")
 	watermarkCmd.Flags().Float64Var(&watermarkOpacity, "opacity", 0.5, "透明度 (0-1)")
-	watermarkCmd.Flags().Float64Var(&watermarkScale, "scale", 1.0, "缩放比例")
-	watermarkCmd.Flags().Float64Var(&watermarkAngle, "angle", 0, "旋转角度")
-	watermarkCmd.Flags().StringVar(&watermarkPos, "pos", "c", "位置：tl(左上)/tr(右上)/c(居中)/bl(左下)/br(右下)")
+	watermarkCmd.Flags().Float64Var(&watermarkScale, "scale", 0.5, "缩放比例 (相对页面)")
+	watermarkCmd.Flags().Float64Var(&watermarkAngle, "angle", 0, "旋转角度 (-180 到 180)")
+	watermarkCmd.Flags().IntVar(&watermarkDiagonal, "diagonal", 0, "对角线 (1=左下到右上, 2=左上到右下)")
+	watermarkCmd.Flags().StringVar(&watermarkPos, "pos", "", "位置：tl/tc/tr/l/c/r/bl/bc/br")
 	watermarkCmd.Flags().IntVar(&watermarkFontSize, "font-size", 24, "字体大小（文字水印）")
+	watermarkCmd.Flags().StringVar(&watermarkFontName, "font-name", "Helvetica", "字体名称：Helvetica/Times-Roman/Courier")
 	watermarkCmd.Flags().StringVar(&watermarkColor, "color", "#808080", "文字颜色（十六进制）")
 
 	watermarkRemoveCmd.Flags().StringVarP(&watermarkOutput, "output", "o", "no-watermark.pdf", "输出文件路径")

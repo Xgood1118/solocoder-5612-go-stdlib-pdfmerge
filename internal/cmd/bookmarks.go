@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -85,6 +86,12 @@ func printBookmarks(bms []pdfcpu.Bookmark, level int) {
 	}
 }
 
+type bookmarkJSON struct {
+	Title string         `json:"title"`
+	Page  int            `json:"page"`
+	Kids  []bookmarkJSON `json:"kids,omitempty"`
+}
+
 func importBookmarks(inputFile string) error {
 	if !util.FileExists(bookmarksImport) {
 		return fmt.Errorf("书签文件不存在: %s", bookmarksImport)
@@ -97,6 +104,7 @@ func importBookmarks(inputFile string) error {
 	defer f.Close()
 
 	reader := csv.NewReader(f)
+	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	if err != nil {
 		return fmt.Errorf("读取 CSV 失败: %w", err)
@@ -106,23 +114,32 @@ func importBookmarks(inputFile string) error {
 		return fmt.Errorf("CSV 文件为空")
 	}
 
-	jsonData := buildBookmarksJSON(records)
+	jsonData, err := buildBookmarksJSON(records)
+	if err != nil {
+		return fmt.Errorf("生成书签 JSON 失败: %w", err)
+	}
 
 	conf := model.NewDefaultConfiguration()
 	outputFile := "bookmarks_imported.pdf"
 
 	log.Info("正在导入书签...")
 	log.Debug("书签数量: %d", len(records))
+	log.Debug("JSON: %s", string(jsonData))
 
 	tmpFile, err := os.CreateTemp("", "bookmarks_*.json")
 	if err != nil {
 		return fmt.Errorf("创建临时文件失败: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.WriteString(jsonData)
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmpFile.Write(jsonData); err != nil {
+		tmpFile.Close()
+		return fmt.Errorf("写入临时文件失败: %w", err)
+	}
 	tmpFile.Close()
 
-	err = api.ImportBookmarksFile(inputFile, tmpFile.Name(), outputFile, true, conf)
+	err = api.ImportBookmarksFile(inputFile, tmpName, outputFile, true, conf)
 	if err != nil {
 		return fmt.Errorf("导入书签失败: %w", err)
 	}
@@ -132,22 +149,20 @@ func importBookmarks(inputFile string) error {
 	return nil
 }
 
-func buildBookmarksJSON(records [][]string) string {
-	type bookmarkNode struct {
-		Title    string          `json:"title"`
-		Page     int             `json:"page"`
-		Children []bookmarkNode `json:"children,omitempty"`
-	}
-
-	root := []bookmarkNode{}
-	levelStack := []*[]bookmarkNode{&root}
+func buildBookmarksJSON(records [][]string) ([]byte, error) {
+	root := []bookmarkJSON{}
+	var lastAtLevel []*bookmarkJSON
 
 	for _, record := range records {
 		if len(record) < 2 {
 			continue
 		}
 		title := record[0]
-		page, _ := strconv.Atoi(record[1])
+		page, err := strconv.Atoi(record[1])
+		if err != nil || page < 1 {
+			log.Warn("跳过无效的页码: %s", record[1])
+			continue
+		}
 		level := 1
 		if len(record) >= 3 {
 			level, _ = strconv.Atoi(record[2])
@@ -156,32 +171,35 @@ func buildBookmarksJSON(records [][]string) string {
 			level = 1
 		}
 
-		node := bookmarkNode{Title: title, Page: page}
+		node := bookmarkJSON{Title: title, Page: page}
 
-		for len(levelStack) > level {
-			levelStack = levelStack[:len(levelStack)-1]
+		for len(lastAtLevel) >= level {
+			lastAtLevel = lastAtLevel[:len(lastAtLevel)-1]
 		}
 
-		if len(levelStack) >= level {
-			parent := levelStack[level-1]
-			*parent = append(*parent, node)
-			if len(levelStack) >= level+1 {
-				levelStack = levelStack[:level]
+		if level == 1 {
+			root = append(root, node)
+			if len(lastAtLevel) == 0 {
+				lastAtLevel = append(lastAtLevel, &root[len(root)-1])
+			} else {
+				lastAtLevel[0] = &root[len(root)-1]
 			}
-			levelStack = append(levelStack, &(*parent)[len(*parent)-1].Children)
+		} else {
+			parent := lastAtLevel[level-2]
+			parent.Kids = append(parent.Kids, node)
+			if len(lastAtLevel) >= level {
+				lastAtLevel[level-1] = &parent.Kids[len(parent.Kids)-1]
+			} else {
+				lastAtLevel = append(lastAtLevel, &parent.Kids[len(parent.Kids)-1])
+			}
 		}
 	}
 
-	jsonStr := "["
-	for i, bm := range root {
-		if i > 0 {
-			jsonStr += ","
-		}
-		jsonStr += fmt.Sprintf(`{"title":"%s","page":%d}`, bm.Title, bm.Page)
+	if len(root) == 0 {
+		return nil, fmt.Errorf("没有有效的书签数据")
 	}
-	jsonStr += "]"
 
-	return jsonStr
+	return json.MarshalIndent(root, "", "  ")
 }
 
 func exportBookmarks(inputFile string) error {
@@ -200,6 +218,6 @@ func exportBookmarks(inputFile string) error {
 
 func init() {
 	rootCmd.AddCommand(bookmarksCmd)
-	bookmarksCmd.Flags().StringVar(&bookmarksImport, "import", "", "从 CSV 文件导入书签")
+	bookmarksCmd.Flags().StringVar(&bookmarksImport, "import", "", "从 CSV 文件导入书签 (格式: 标题,页码,层级)")
 	bookmarksCmd.Flags().StringVar(&bookmarksExport, "export", "", "导出书签到 JSON 文件")
 }

@@ -1,0 +1,1 @@
+有几个问题：1. 文字水印加啥文字都报"ambiguous parameter prefix 'f'"，配置格式跟 pdfcpu 预期的对不上。2. CSV 导入书签报"cannot unmarshal array into pdfcpu.BookmarkTree"，JSON 格式还是不对。检查修复一下。

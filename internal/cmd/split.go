@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"pdftool/internal/log"
 	"pdftool/internal/util"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/spf13/cobra"
 )
@@ -112,32 +112,109 @@ func splitByPageRange(inputFile string, conf *model.Configuration) error {
 		return err
 	}
 
-	pageNrs := []int{}
-	for _, pr := range pageRanges {
-		if strings.Contains(pr, "-") {
-			parts := strings.SplitN(pr, "-", 2)
-			start, _ := strconv.Atoi(parts[0])
-			end, _ := strconv.Atoi(parts[1])
-			for i := start; i <= end; i++ {
-				pageNrs = append(pageNrs, i)
-			}
-		} else {
-			n, _ := strconv.Atoi(pr)
-			pageNrs = append(pageNrs, n)
+	base := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
+
+	for i, pr := range pageRanges {
+		outFile := filepath.Join(splitOutputDir, fmt.Sprintf("%s_%d.pdf", base, i+1))
+		log.Debug("提取范围 %s -> %s", pr, outFile)
+
+		err := api.CollectFile(inputFile, outFile, []string{pr}, conf)
+		if err != nil {
+			return fmt.Errorf("提取范围 %s 失败: %w", pr, err)
 		}
+
+		size, _ := util.FileSize(outFile)
+		log.Debug("  完成: %s (%s)", outFile, util.FormatSize(size))
 	}
 
-	err = api.SplitByPageNrFile(inputFile, splitOutputDir, pageNrs, conf)
-	if err != nil {
-		return fmt.Errorf("拆分失败: %w", err)
-	}
-
-	log.Success("按页面范围拆分完成")
+	log.Success("按页面范围拆分完成，生成 %d 个文件", len(pageRanges))
 	return nil
 }
 
 func splitByBookmark(inputFile string, conf *model.Configuration) error {
-	return fmt.Errorf("按书签拆分功能暂未实现")
+	log.Info("按书签层级拆分: %s", inputFile)
+
+	f, err := os.Open(inputFile)
+	if err != nil {
+		return fmt.Errorf("打开文件失败: %w", err)
+	}
+	defer f.Close()
+
+	bms, err := api.Bookmarks(f, conf)
+	if err != nil {
+		return fmt.Errorf("读取书签失败: %w", err)
+	}
+
+	if len(bms) == 0 {
+		return fmt.Errorf("PDF 没有书签")
+	}
+
+	pageCount, err := api.PageCount(f, conf)
+	if err != nil {
+		return fmt.Errorf("获取页数失败: %w", err)
+	}
+
+	allBookmarks := flattenBookmarks(bms)
+	if len(allBookmarks) == 0 {
+		return fmt.Errorf("没有可用于拆分的书签")
+	}
+
+	base := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
+	safeChars := func(s string) string {
+		s = strings.ReplaceAll(s, "/", "_")
+		s = strings.ReplaceAll(s, "\\", "_")
+		s = strings.ReplaceAll(s, ":", "_")
+		s = strings.ReplaceAll(s, "*", "_")
+		s = strings.ReplaceAll(s, "?", "_")
+		s = strings.ReplaceAll(s, "\"", "_")
+		s = strings.ReplaceAll(s, "<", "_")
+		s = strings.ReplaceAll(s, ">", "_")
+		s = strings.ReplaceAll(s, "|", "_")
+		return s
+	}
+
+	for i, bm := range allBookmarks {
+		startPage := bm.PageFrom
+		endPage := pageCount
+		if i < len(allBookmarks)-1 {
+			endPage = allBookmarks[i+1].PageFrom - 1
+		}
+		if endPage < startPage {
+			endPage = startPage
+		}
+
+		pageRange := fmt.Sprintf("%d-%d", startPage, endPage)
+		safeTitle := safeChars(bm.Title)
+		if safeTitle == "" {
+			safeTitle = fmt.Sprintf("bookmark_%d", i+1)
+		}
+		outFile := filepath.Join(splitOutputDir, fmt.Sprintf("%s_%02d_%s.pdf", base, i+1, safeTitle))
+
+		log.Debug("提取书签 \"%s\" 页 %s -> %s", bm.Title, pageRange, outFile)
+
+		err := api.CollectFile(inputFile, outFile, []string{pageRange}, conf)
+		if err != nil {
+			log.Warn("提取书签 \"%s\" 失败: %v", bm.Title, err)
+			continue
+		}
+
+		size, _ := util.FileSize(outFile)
+		log.Debug("  完成: %s (%s)", outFile, util.FormatSize(size))
+	}
+
+	log.Success("按书签拆分完成，生成 %d 个文件", len(allBookmarks))
+	return nil
+}
+
+func flattenBookmarks(bms []pdfcpu.Bookmark) []pdfcpu.Bookmark {
+	var result []pdfcpu.Bookmark
+	for _, bm := range bms {
+		result = append(result, bm)
+		if len(bm.Kids) > 0 {
+			result = append(result, flattenBookmarks(bm.Kids)...)
+		}
+	}
+	return result
 }
 
 func listSplitFiles(inputFile string) ([]string, error) {
