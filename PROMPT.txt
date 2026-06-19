@@ -1,0 +1,35 @@
+写一个 PDF 合并拆分的命令行工具，技术栈用 Go。处理日常 PDF 文件合并、拆分、提取页面、加密解密这类需求。Go 里 PDF 操作推荐用 pdfcpu 这个库（纯 Go，跨平台，单二进制部署）。
+
+合并：把多个 PDF 合并成一个，按命令行参数顺序。--output 指定输出文件。
+
+拆分：把一个 PDF 拆成多个：
+- 按页数：每 N 页一个文件
+- 按范围：1-3,5,7-9 这种指定页
+- 按章节：书签层级拆分（pdfcpu 的 bookmarks 功能）
+- 拆成单页：每个页一个文件
+
+页面提取：从一个 PDF 抽出指定页到新 PDF。--pages "1,3,5-10" 这种语法。
+
+页面删除：删除指定页（输出不包含这些页）。
+
+页面旋转：旋转指定页 90/180/270 度。
+
+PDF 元数据：查看和修改标题、作者、主题、关键词、创建时间。批量给一堆 PDF 改作者为公司名（统一文档来源）。
+
+水印：在每页加文字或图片水印。位置（左上/右上/居中/左下/右下，可配置）、透明度、字号、颜色、旋转角度。
+
+加密：给 PDF 加密码（用户密码 + owner 密码），权限设置（禁止打印/禁止复制/禁止修改）。解密：已知 owner 密码时移除加密。
+
+压缩：压缩 PDF 里的图片（重新编码 JPEG/PNG 减小体积），清理重复字体，删除无用的对象。
+
+书签：列出 PDF 现有书签（带页码），从外部文件导入书签（CSV 格式：标题,页码,层级）。
+
+PDF 信息：显示页数、文件大小、PDF 版本、是否加密、是否带表单、是否带附件、字体列表。
+
+性能：处理大文件（几百 MB）不能全部读内存里，pdfcpu 支持流式处理。批量处理时多文件并行（goroutine）。
+
+代码组织：main.go（CLI 路由）、internal/cmd/（子命令实现：merge/split/extract/rotate/watermark/encrypt/info）、internal/util/（路径处理、参数解析）、internal/log/（日志）。
+
+依赖：pdfcpu/paper-api（PDF 处理）、spf13/cobra（CLI）。≤ 5 个。
+
+启动：pdfcpu merge -o out.pdf a.pdf b.pdf c.pdf，pdfcpu split --pages-per-file 5 input.pdf output_prefix_。
