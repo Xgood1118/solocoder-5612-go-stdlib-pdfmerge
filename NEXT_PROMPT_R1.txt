@@ -1,0 +1,1 @@
+有几个问题：1. 拆分 PDF 传 "1-3,5,7-9" 这种范围，出来的不是 3 个文件而是一堆单页。2. 拆分 PDF 按书签层级那个功能直接报"暂未实现"，根本用不了。3. 文字水印传啥都报"Invalid watermark configuration string"。4. 从 CSV 导入书签报"cannot unmarshal array"，一条都导不进去。检查修复一下。
